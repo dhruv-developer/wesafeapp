@@ -1,11 +1,27 @@
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_map/flutter_map.dart';
-import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart' show rootBundle;
+
+void main() {
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'OpenStreetMap Example',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
+      home: MapScreen(),
+    );
+  }
+}
 
 class MapScreen extends StatefulWidget {
   @override
@@ -13,95 +29,236 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  MapController mapController = MapController();
+  final TextEditingController startController = TextEditingController();
+  final TextEditingController endController = TextEditingController();
   LatLng? startLocation;
   LatLng? endLocation;
-  List<Marker> markers = [];
-  List<Polyline> polylines = [];
-  final TextEditingController _startController = TextEditingController();
-  final TextEditingController _endController = TextEditingController();
+  List<LatLng> routePoints = [];
+  List<Map<String, dynamic>> crimeData = [];
+  final MapController mapController = MapController();
+  final String apiKey = '5b3ce3597851110001cf62482a39f0c95dbd475a959f1725db3e6fcc'; // Replace with your OpenRouteService API key
+  bool showCrimeMarkers = false; // Flag to control crime marker visibility
+
+  Future<void> _findLocations() async {
+    String startAddress = startController.text;
+    String endAddress = endController.text;
+
+    try {
+      // Convert start address to latitude and longitude
+      List<Location> startLocations = await locationFromAddress(startAddress);
+      if (startLocations.isNotEmpty) {
+        setState(() {
+          startLocation = LatLng(startLocations.first.latitude, startLocations.first.longitude);
+        });
+      }
+
+      // Convert end address to latitude and longitude
+      List<Location> endLocations = await locationFromAddress(endAddress);
+      if (endLocations.isNotEmpty) {
+        setState(() {
+          endLocation = LatLng(endLocations.first.latitude, endLocations.first.longitude);
+        });
+        await _fetchRoute(startLocation!, endLocation!);
+      }
+    } catch (e) {
+      print('Error finding locations: $e');
+    }
+  }
+
+  Future<void> _fetchRoute(LatLng start, LatLng end) async {
+    final String url =
+        'https://api.openrouteservice.org/v2/directions/driving-car?api_key=$apiKey&start=${start.longitude},${start.latitude}&end=${end.longitude},${end.latitude}';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      print('Status Code: ${response.statusCode}');
+      print('Response Body: ${response.body}'); // Debugging: Print the API response
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['features'] != null && data['features'].isNotEmpty) {
+          // Extract route coordinates
+          List<dynamic> coordinates = data['features'][0]['geometry']['coordinates'];
+
+          // Transform coordinates into LatLng points
+          List<LatLng> routePoints = coordinates.map((coord) => LatLng(coord[1], coord[0])).toList();
+
+          // Fetch crime data and adjust route
+          crimeData = await _fetchCrimeData();
+          List<LatLng> adjustedRoute = _adjustRouteBasedOnCrime(routePoints, crimeData);
+
+          setState(() {
+            this.routePoints = adjustedRoute;
+          });
+        } else {
+          print('No route found in the API response');
+        }
+      } else {
+        print('Failed to load route. Status code: ${response.statusCode}');
+        print('Response body: ${response.body}');
+      }
+    } catch (e) {
+      print('Error fetching route: $e');
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchCrimeData() async {
+    try {
+      final String jsonString = await rootBundle.loadString('assets/crime_data.json');
+      final List<dynamic> jsonData = json.decode(jsonString);
+      return List<Map<String, dynamic>>.from(jsonData);
+    } catch (e) {
+      print('Error loading crime data: $e');
+      return [];
+    }
+  }
+
+  List<LatLng> _adjustRouteBasedOnCrime(List<LatLng> routePoints, List<Map<String, dynamic>> crimeData) {
+    // Placeholder logic to adjust route based on crime data
+    // For simplicity, let's return the original route here.
+    return routePoints;
+  }
+
+  void _zoomIn() {
+    mapController.move(mapController.center, mapController.zoom + 1);
+  }
+
+  void _zoomOut() {
+    mapController.move(mapController.center, mapController.zoom - 1);
+  }
+
+  void _recenter() {
+    if (startLocation != null) {
+      mapController.move(startLocation!, 13.0);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('WeSafe'),
+        title: Text('OpenStreetMap Example'),
       ),
       body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(8.0),
-            child: Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+            child: TextField(
+              controller: startController,
+              decoration: InputDecoration(
+                labelText: 'Start Location',
+                border: OutlineInputBorder(),
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Column(
-                  children: [
-                    TextField(
-                      controller: _startController,
-                      decoration: InputDecoration(
-                        hintText: 'Enter Start Location',
-                        suffixIcon: IconButton(
-                          icon: Icon(Icons.search),
-                          onPressed: () => _searchLocation(true),
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: 8.0),
-                    TextField(
-                      controller: _endController,
-                      decoration: InputDecoration(
-                        hintText: 'Enter End Location',
-                        suffixIcon: IconButton(
-                          icon: Icon(Icons.search),
-                          onPressed: () => _searchLocation(false),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: FlutterMap(
-              mapController: mapController,
-              options: MapOptions(
-                center: LatLng(28.7041, 77.1025),
-                zoom: 10,
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate: 'https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token={accessToken}',
-                  additionalOptions: {
-                    'id': 'mapbox/streets-v11',
-                    'accessToken': 'pk.eyJ1Ijoid2VzYWZlMTEwMiIsImEiOiJjbHo5dGpyOXAwYzI5Mm1xemV2enZqaG1sIn0.NmxIb-dtvoYn9kx_BZacVA',
-                  },
-                ),
-                MarkerLayer(markers: markers),
-                PolylineLayer(polylines: polylines),
-              ],
             ),
           ),
           Padding(
             padding: const EdgeInsets.all(8.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: TextField(
+              controller: endController,
+              decoration: InputDecoration(
+                labelText: 'End Location',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: _findLocations,
+            child: Text('Find Route'),
+          ),
+          Expanded(
+            child: Stack(
               children: [
-                IconButton(
-                  icon: Icon(Icons.zoom_in),
-                  onPressed: _zoomIn,
+                FlutterMap(
+                  mapController: mapController,
+                  options: MapOptions(
+                    center: startLocation ?? LatLng(51.509865, -0.118092),
+                    zoom: 13.0,
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      subdomains: ['a', 'b', 'c'],
+                    ),
+                    if (routePoints.isNotEmpty)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: routePoints,
+                            strokeWidth: 4.0,
+                            color: Colors.blue,
+                          ),
+                        ],
+                      ),
+                    MarkerLayer(
+                      markers: [
+                        if (startLocation != null)
+                          Marker(
+                            width: 80.0,
+                            height: 80.0,
+                            point: startLocation!,
+                            child: Container(
+                              child: Icon(
+                                Icons.pin_drop,
+                                color: Colors.red,
+                                size: 40.0,
+                              ),
+                            ),
+                          ),
+                        if (endLocation != null)
+                          Marker(
+                            width: 80.0,
+                            height: 80.0,
+                            point: endLocation!,
+                            child: Container(
+                              child: Icon(
+                                Icons.pin_drop,
+                                color: Colors.green,
+                                size: 40.0,
+                              ),
+                            ),
+                          ),
+                        // Add crime markers
+                        if (showCrimeMarkers) ..._crimeMarkers,
+                      ],
+                    ),
+                  ],
                 ),
-                IconButton(
-                  icon: Icon(Icons.zoom_out),
-                  onPressed: _zoomOut,
-                ),
-                IconButton(
-                  icon: Icon(Icons.my_location),
-                  onPressed: _recenterMap,
+                Positioned(
+                  bottom: 16,
+                  right: 16,
+                  child: Column(
+                    children: [
+                      FloatingActionButton(
+                        onPressed: _zoomIn,
+                        tooltip: 'Zoom In',
+                        child: Icon(Icons.zoom_in),
+                      ),
+                      SizedBox(height: 16),
+                      FloatingActionButton(
+                        onPressed: _zoomOut,
+                        tooltip: 'Zoom Out',
+                        child: Icon(Icons.zoom_out),
+                      ),
+                      SizedBox(height: 16),
+                      FloatingActionButton(
+                        onPressed: _recenter,
+                        tooltip: 'Recenter',
+                        child: Icon(Icons.my_location),
+                      ),
+                      SizedBox(height: 16),
+                      // Toggle button to show/hide crime markers
+                      FloatingActionButton(
+                        onPressed: () {
+                          setState(() {
+                            showCrimeMarkers = !showCrimeMarkers;
+                          });
+                        },
+                        tooltip: showCrimeMarkers ? 'Hide Crime Markers' : 'Show Crime Markers',
+                        child: Icon(showCrimeMarkers ? Icons.visibility_off : Icons.visibility),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -111,142 +268,20 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Future<void> _searchLocation(bool isStart) async {
-    String address = isStart ? _startController.text : _endController.text;
-
-    try {
-      List<Location> locations = await locationFromAddress(address);
-      if (locations.isNotEmpty) {
-        setState(() {
-          LatLng location = LatLng(locations[0].latitude, locations[0].longitude);
-          if (isStart) {
-            startLocation = location;
-            markers.add(Marker(
-              point: startLocation!,
-              child: Icon(Icons.location_on, color: Colors.red, size: 40),
-            ));
-          } else {
-            endLocation = location;
-            markers.add(Marker(
-              point: endLocation!,
-              child: Icon(Icons.location_on, color: Colors.green, size: 40),
-            ));
-            _getRoutes();
-          }
-        });
-      }
-    } catch (e) {
-      print("Error: $e");
-    }
-  }
-
-  Future<void> _getRoutes() async {
-    if (startLocation == null || endLocation == null) return;
-
-    final response = await http.get(
-      Uri.parse('https://api.openrouteservice.org/v2/directions/driving-car?api_key=YOUR_API_KEY&start=${startLocation!.longitude},${startLocation!.latitude}&end=${endLocation!.longitude},${endLocation!.latitude}'),
-    );
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      List route = data['features'][0]['geometry']['coordinates'];
-      List<LatLng> points = route.map((point) => LatLng(point[1], point[0])).toList();
-
-      setState(() {
-        polylines.add(Polyline(
-          points: points,
-          strokeWidth: 4.0,
-          color: Colors.blue,
-        ));
-      });
-
-      await _getCrimeData(points);
-    }
-  }
-
-  Future<void> _getCrimeData(List<LatLng> route) async {
-    final String response = await rootBundle.loadString('assets/crime_data.json');
-    final data = json.decode(response);
-    List crimes = data['crimes'];
-
-    int minCrimes = route.length;
-    Polyline safestRoute = polylines.first;
-
-    // Logic to find the route with the minimum number of crimes
-    int crimeCount = 0;
-    for (var crime in crimes) {
-      LatLng crimeLocation = LatLng(crime['Latitude'], crime['Longitude']);
-      for (var point in route) {
-        if (_calculateDistance(crimeLocation, point) < 0.01) {
-          crimeCount++;
-        }
-      }
-    }
-
-    if (crimeCount < minCrimes) {
-      minCrimes = crimeCount;
-      safestRoute = Polyline(
-        points: route,
-        strokeWidth: 4.0,
-        color: Colors.green,
+  List<Marker> get _crimeMarkers {
+    return crimeData.map((crime) {
+      return Marker(
+        width: 80.0,
+        height: 80.0,
+        point: LatLng(crime['Latitude'], crime['Longitude']),
+        child: Container(
+          child: Icon(
+            Icons.warning,
+            color: Colors.blue,
+            size: 40.0,
+          ),
+        ),
       );
-
-      setState(() {
-        polylines.clear();
-        polylines.add(safestRoute);
-      });
-    }
-
-    await _addPoliceStations();
-  }
-
-  Future<void> _addPoliceStations() async {
-    try {
-      final String response = await rootBundle.loadString('assets/police_station.json');
-      final data = json.decode(response);
-      List policeStations = data['stations'];
-
-      setState(() {
-        for (var station in policeStations) {
-          markers.add(Marker(
-            point: LatLng(station['Latitude'], station['Longitude']),
-            child: Icon(
-              Icons.local_police,
-              color: Color(0xFF000080), // Navy blue color
-              size: 40,
-            ),
-          ));
-        }
-      });
-    } catch (e) {
-      print("Error loading police stations: $e");
-    }
-  }
-
-  double _calculateDistance(LatLng point1, LatLng point2) {
-    double lat1 = point1.latitude;
-    double lon1 = point1.longitude;
-    double lat2 = point2.latitude;
-    double lon2 = point2.longitude;
-
-    const p = 0.017453292519943295;
-    final c = 0.5 - cos((lat2 - lat1) * p) / 2 + cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lon2 - lon1) * p)) / 2;
-    return 12742 * asin(sqrt(c));
-  }
-
-  void _zoomIn() {
-    final currentZoom = mapController.zoom;
-    mapController.move(mapController.center, currentZoom + 1);
-  }
-
-  void _zoomOut() {
-    final currentZoom = mapController.zoom;
-    mapController.move(mapController.center, currentZoom - 1);
-  }
-
-  void _recenterMap() {
-    if (startLocation != null) {
-      mapController.move(startLocation!, mapController.zoom);
-    }
+    }).toList();
   }
 }
